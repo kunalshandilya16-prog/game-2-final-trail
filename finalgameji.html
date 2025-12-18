@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Purr-suit Run: River Dash</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #87CEEB; /* Sky blue */
+            user-select: none;
+        }
+
+        #game-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        #score-board {
+            padding: 20px;
+            font-size: 32px;
+            font-weight: bold;
+            color: white;
+            text-shadow: 2px 2px 0 #000;
+            text-align: left;
+        }
+
+        #start-screen, #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+            color: white;
+            z-index: 10;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        h1 {
+            font-size: 4rem;
+            margin: 0;
+            color: #FFA500;
+            text-shadow: 3px 3px 0 #8B4500;
+        }
+
+        p {
+            font-size: 1.5rem;
+            margin: 10px 0 30px 0;
+        }
+
+        button {
+            background: linear-gradient(to bottom, #FFA500, #FF4500);
+            border: 4px solid white;
+            color: white;
+            padding: 15px 40px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            transition: transform 0.1s;
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        .controls-hint {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            margin-top: 20px;
+        }
+
+        #final-score {
+            font-size: 3rem;
+            color: #FFD700;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container"></div>
+
+    <div id="ui-layer">
+        <div id="score-board">Score: <span id="score">0</span></div>
+    </div>
+
+    <div id="start-screen">
+        <h1>RIVER DASH</h1>
+        <p>Outrun the Dog! Dodge Monsters!</p>
+        <button id="start-btn">RUN!</button>
+        <div class="controls-hint">
+            Desktop: Arrows to Move/Jump/Duck<br>
+            Mobile: Swipe to Move
+        </div>
+    </div>
+
+    <div id="game-over-screen" class="hidden">
+        <h1>CAUGHT!</h1>
+        <p>Score: <span id="final-score">0</span></p>
+        <button id="restart-btn">TRY AGAIN</button>
+    </div>
+
+    <!-- Three.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // --- GAME CONSTANTS ---
+        const LANE_WIDTH = 3.5;
+        const GRAVITY = 0.015;
+        const JUMP_FORCE = 0.35;
+        const BASE_SPEED = 0.4;
+        
+        // --- GLOBAL VARIABLES ---
+        let scene, camera, renderer;
+        let clock;
+        let gameActive = false;
+        let speed = BASE_SPEED;
+        let score = 0;
+        let time = 0;
+
+        // Entities
+        let player, dog;
+        let obstacles = [];
+        let environmentChunks = [];
+        
+        // State
+        let currentLane = 0; // -1 (Left), 0 (Center), 1 (Right)
+        let isJumping = false;
+        let isDucking = false;
+        let verticalVelocity = 0;
+        let duckTimer = 0;
+        let shakeIntensity = 0;
+
+        // --- INIT FUNCTION ---
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+            scene.fog = new THREE.Fog(0x87CEEB, 20, 70);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 6, 9);
+            camera.lookAt(0, 0, -5);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('game-container').appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+            dirLight.position.set(15, 20, 10);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 1024;
+            dirLight.shadow.mapSize.height = 1024;
+            dirLight.shadow.camera.near = 0.1;
+            dirLight.shadow.camera.far = 100;
+            dirLight.shadow.camera.left = -20;
+            dirLight.shadow.camera.right = 20;
+            dirLight.shadow.camera.top = 20;
+            dirLight.shadow.camera.bottom = -20;
+            scene.add(dirLight);
+
+            createEnvironment();
+            player = createCharacter('cat');
+            dog = createCharacter('dog');
+            
+            document.addEventListener('keydown', handleKeyDown);
+            setupTouchControls();
+            document.getElementById('start-btn').addEventListener('click', startGame);
+            document.getElementById('restart-btn').addEventListener('click', resetGame);
+            window.addEventListener('resize', onWindowResize, false);
+
+            clock = new THREE.Clock();
+            animate();
+        }
+
+        // --- ENVIRONMENT & OBJECTS ---
+
+        function createEnvironment() {
+            // Water Plane (River)
+            const waterGeo = new THREE.PlaneGeometry(200, 300);
+            const waterMat = new THREE.MeshPhongMaterial({ 
+                color: 0x1E90FF, 
+                shininess: 80,
+                flatShading: true
+            });
+            const water = new THREE.Mesh(waterGeo, waterMat);
+            water.rotation.x = -Math.PI / 2;
+            water.position.y = -2;
+            water.position.z = -50;
+            scene.add(water);
+
+            // Main Path (Bridge/Canal Bank)
+            const pathWidth = LANE_WIDTH * 3 + 2;
+            const pathGeo = new THREE.BoxGeometry(pathWidth, 4, 300);
+            const pathMat = new THREE.MeshLambertMaterial({ color: 0xD2B48C }); // Tan/Sand color
+            const path = new THREE.Mesh(pathGeo, pathMat);
+            path.position.y = -2.01; // Just below zero so y=0 is surface
+            path.position.z = -50;
+            path.receiveShadow = true;
+            scene.add(path);
+
+            // Side Walls
+            const wallGeo = new THREE.BoxGeometry(1, 1, 300);
+            const wallMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            
+            const leftWall = new THREE.Mesh(wallGeo, wallMat);
+            leftWall.position.set(-pathWidth/2 - 0.5, -0.5, -50);
+            scene.add(leftWall);
+
+            const rightWall = new THREE.Mesh(wallGeo, wallMat);
+            rightWall.position.set(pathWidth/2 + 0.5, -0.5, -50);
+            scene.add(rightWall);
+        }
+
+        function createCharacter(type) {
+            const group = new THREE.Group();
+            const color = type === 'cat' ? 0xFFA500 : 0x8B4513;
+            const mat = new THREE.MeshLambertMaterial({ color: color });
+            const whiteMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+            const blackMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+
+            // Scale factor: Dog is bigger
+            const s = type === 'cat' ? 1 : 1.3;
+
+            // Body
+            const bodyGeo = new THREE.BoxGeometry(0.8 * s, 0.6 * s, 1.2 * s);
+            const body = new THREE.Mesh(bodyGeo, mat);
+            body.position.y = 0.6 * s;
+            body.castShadow = true;
+            group.add(body);
+
+            // Head
+            const headGeo = new THREE.BoxGeometry(0.7 * s, 0.6 * s, 0.7 * s);
+            const head = new THREE.Mesh(headGeo, mat);
+            head.position.set(0, 1.0 * s, 0.5 * s);
+            head.castShadow = true;
+            group.add(head);
+
+            // Eyes
+            const eyeGeo = new THREE.BoxGeometry(0.15 * s, 0.15 * s, 0.1 * s);
+            const eyeL = new THREE.Mesh(eyeGeo, blackMat);
+            eyeL.position.set(-0.2 * s, 1.1 * s, 0.85 * s);
+            group.add(eyeL);
+            const eyeR = new THREE.Mesh(eyeGeo, blackMat);
+            eyeR.position.set(0.2 * s, 1.1 * s, 0.85 * s);
+            group.add(eyeR);
+
+            // Ears
+            const earGeo = new THREE.ConeGeometry(0.15 * s, 0.3 * s, 4);
+            const earL = new THREE.Mesh(earGeo, mat);
+            earL.position.set(-0.25 * s, 1.4 * s, 0.5 * s);
+            earL.rotation.z = 0.3;
+            group.add(earL);
+            const earR = new THREE.Mesh(earGeo, mat);
+            earR.position.set(0.25 * s, 1.4 * s, 0.5 * s);
+            earR.rotation.z = -0.3;
+            group.add(earR);
+
+            // Tail
+            const tailGeo = new THREE.BoxGeometry(0.15 * s, 0.15 * s, 0.8 * s);
+            const tail = new THREE.Mesh(tailGeo, mat);
+            tail.position.set(0, 0.7 * s, -0.7 * s);
+            tail.rotation.x = 0.5;
+            group.add(tail);
+
+            // Legs (For Animation)
+            const legs = [];
+            const legGeo = new THREE.BoxGeometry(0.2 * s, 0.6 * s, 0.2 * s);
+            // FL, FR, BL, BR
+            const positions = [
+                {x: -0.25*s, z: 0.4*s}, {x: 0.25*s, z: 0.4*s},
+                {x: -0.25*s, z: -0.4*s}, {x: 0.25*s, z: -0.4*s}
+            ];
+
+            positions.forEach(pos => {
+                const legGroup = new THREE.Group();
+                legGroup.position.set(pos.x, 0.5 * s, pos.z); // Pivot point at shoulder/hip
+                
+                const legMesh = new THREE.Mesh(legGeo, whiteMat);
+                legMesh.position.y = -0.3 * s; // Offset so it hangs down
+                legMesh.castShadow = true;
+                
+                legGroup.add(legMesh);
+                group.add(legGroup);
+                legs.push(legGroup);
+            });
+
+            if (type === 'dog') {
+                group.position.z = 4;
+            }
+
+            scene.add(group);
+            return { mesh: group, legs: legs, type: type, lane: 0 };
+        }
+
+        function createMonster() {
+            const group = new THREE.Group();
+            // Main body - spiky sphere look using icosahedron
+            const geo = new THREE.IcosahedronGeometry(1.2, 0);
+            const mat = new THREE.MeshLambertMaterial({ color: 0x32CD32, flatShading: true }); // Lime Green
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.y = 1.2;
+            group.add(mesh);
+
+            // Eyes
+            const eyeGeo = new THREE.BoxGeometry(0.3, 0.3, 0.2);
+            const eyeMat = new THREE.MeshBasicMaterial({ color: 0xFF0000 });
+            const eye = new THREE.Mesh(eyeGeo, eyeMat);
+            eye.position.set(0, 1.5, 1);
+            group.add(eye);
+            
+            group.traverse(o => { if(o.isMesh) o.castShadow = true; });
+            return group;
+        }
+
+        function createCanal() {
+            // A canal is a gap in the road filled with water
+            const group = new THREE.Group();
+            
+            // Water surface
+            const waterGeo = new THREE.PlaneGeometry(3, 3);
+            const waterMat = new THREE.MeshPhongMaterial({ color: 0x00008B }); // Dark blue
+            const water = new THREE.Mesh(waterGeo, waterMat);
+            water.rotation.x = -Math.PI/2;
+            water.position.y = 0.05;
+            group.add(water);
+
+            // Warning edges
+            const edgeGeo = new THREE.BoxGeometry(3, 0.1, 0.2);
+            const edgeMat = new THREE.MeshLambertMaterial({ color: 0xFFFF00 });
+            
+            const front = new THREE.Mesh(edgeGeo, edgeMat);
+            front.position.z = 1.5; front.position.y = 0.05;
+            group.add(front);
+
+            const back = new THREE.Mesh(edgeGeo, edgeMat);
+            back.position.z = -1.5; back.position.y = 0.05;
+            group.add(back);
+
+            return group;
+        }
+
+        function createObstacle() {
+            // Types: 
+            // 0: Log (Jump)
+            // 1: High Sign (Duck)
+            // 2: Monster (Dodge)
+            // 3: Canal (Jump Gap)
+
+            const type = Math.floor(Math.random() * 4);
+            const lane = Math.floor(Math.random() * 3) - 1; 
+            
+            let mesh;
+            
+            if (type === 0) {
+                // Log/Crate
+                const geo = new THREE.CylinderGeometry(0.4, 0.4, 2.5, 10);
+                const mat = new THREE.MeshLambertMaterial({ color: 0x5D4037 });
+                mesh = new THREE.Mesh(geo, mat);
+                mesh.rotation.z = Math.PI / 2;
+                mesh.position.y = 0.4;
+                mesh.castShadow = true;
+            } else if (type === 1) {
+                // High Sign
+                mesh = new THREE.Group();
+                const poleGeo = new THREE.CylinderGeometry(0.1, 0.1, 3);
+                const poleMat = new THREE.MeshLambertMaterial({ color: 0x666666 });
+                const p1 = new THREE.Mesh(poleGeo, poleMat); p1.position.x = -1; p1.position.y = 1.5;
+                const p2 = new THREE.Mesh(poleGeo, poleMat); p2.position.x = 1; p2.position.y = 1.5;
+                
+                const signGeo = new THREE.BoxGeometry(2.5, 1, 0.2);
+                const signMat = new THREE.MeshLambertMaterial({ color: 0xD32F2F }); // Red
+                const sign = new THREE.Mesh(signGeo, signMat);
+                sign.position.y = 2.5;
+
+                mesh.add(p1); mesh.add(p2); mesh.add(sign);
+                mesh.traverse(o => { if(o.isMesh) o.castShadow = true; });
+            } else if (type === 2) {
+                // Monster
+                mesh = createMonster();
+            } else {
+                // Canal Gap
+                mesh = createCanal();
+            }
+
+            mesh.position.x = lane * LANE_WIDTH;
+            mesh.position.z = -100;
+
+            scene.add(mesh);
+            
+            return {
+                mesh: mesh,
+                type: type,
+                active: true
+            };
+        }
+
+        // --- CONTROLS --- (Same as before)
+        function handleKeyDown(event) {
+            if (!gameActive) return;
+            switch(event.key) {
+                case 'ArrowLeft': case 'a': moveLane(-1); break;
+                case 'ArrowRight': case 'd': moveLane(1); break;
+                case 'ArrowUp': case 'w': case ' ': jump(); break;
+                case 'ArrowDown': case 's': duck(); break;
+            }
+        }
+
+        let touchStartX = 0, touchStartY = 0;
+        function setupTouchControls() {
+            document.addEventListener('touchstart', e => {
+                touchStartX = e.changedTouches[0].screenX;
+                touchStartY = e.changedTouches[0].screenY;
+            });
+            document.addEventListener('touchend', e => {
+                if (!gameActive) return;
+                const dx = e.changedTouches[0].screenX - touchStartX;
+                const dy = e.changedTouches[0].screenY - touchStartY;
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    if (Math.abs(dx) > 30) moveLane(dx > 0 ? 1 : -1);
+                } else {
+                    if (Math.abs(dy) > 30) dy > 0 ? duck() : jump();
+                }
+            });
+        }
+
+        function moveLane(direction) {
+            currentLane += direction;
+            if (currentLane < -1) currentLane = -1;
+            if (currentLane > 1) currentLane = 1;
+        }
+
+        function jump() {
+            if (!isJumping && !isDucking) {
+                isJumping = true;
+                verticalVelocity = JUMP_FORCE;
+            }
+        }
+
+        function duck() {
+            if (!isJumping && !isDucking) {
+                isDucking = true;
+                duckTimer = 40;
+                player.mesh.scale.set(1.2, 0.5, 1.2);
+                player.mesh.position.y = 0.3;
+            } else if (isJumping) {
+                verticalVelocity = -JUMP_FORCE; // Fast drop
+            }
+        }
+
+        // --- LOGIC ---
+
+        function startGame() {
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('game-over-screen').classList.add('hidden');
+            resetGameVariables();
+            gameActive = true;
+        }
+
+        function resetGame() {
+            document.getElementById('game-over-screen').classList.add('hidden');
+            resetGameVariables();
+            gameActive = true;
+        }
+
+        function resetGameVariables() {
+            score = 0;
+            speed = BASE_SPEED;
+            currentLane = 0;
+            obstacles.forEach(obs => scene.remove(obs.mesh));
+            obstacles = [];
+            player.mesh.position.set(0, 0, 0);
+            player.mesh.scale.set(1, 1, 1);
+            verticalVelocity = 0;
+            isJumping = isDucking = false;
+            dog.mesh.position.set(0, 0, 4);
+            document.getElementById('score').innerText = '0';
+        }
+
+        function gameOver() {
+            gameActive = false;
+            shakeIntensity = 20;
+            document.getElementById('final-score').innerText = Math.floor(score);
+            document.getElementById('game-over-screen').classList.remove('hidden');
+        }
+
+        function spawnObstacleLogic() {
+            const spawnChance = 0.02 + (score * 0.0001); 
+            if (Math.random() < spawnChance) {
+                if (obstacles.length > 0 && obstacles[obstacles.length-1].mesh.position.z < -60) return; 
+                obstacles.push(createObstacle());
+            }
+        }
+
+        function animateCharacter(charObj, dt, isPlayer) {
+            const t = clock.getElapsedTime() * 15;
+            
+            // Move legs
+            if (!isPlayer || (!isJumping && !isDucking)) {
+                charObj.legs[0].rotation.x = Math.sin(t) * 0.5; // FL
+                charObj.legs[1].rotation.x = Math.sin(t + Math.PI) * 0.5; // FR
+                charObj.legs[2].rotation.x = Math.sin(t + Math.PI) * 0.5; // BL
+                charObj.legs[3].rotation.x = Math.sin(t) * 0.5; // BR
+            } else {
+                // Reset legs if jumping/ducking
+                charObj.legs.forEach(l => l.rotation.x = 0);
+            }
+
+            // Bobbing
+            if (!isPlayer || (!isJumping && !isDucking)) {
+                charObj.mesh.position.y = (isPlayer ? 0 : 0) + Math.abs(Math.sin(t)) * 0.1;
+            }
+        }
+
+        function updateGame() {
+            // Player Movement
+            const targetX = currentLane * LANE_WIDTH;
+            player.mesh.position.x += (targetX - player.mesh.position.x) * 0.15;
+
+            // Gravity
+            if (isJumping) {
+                player.mesh.position.y += verticalVelocity;
+                verticalVelocity -= GRAVITY;
+                if (player.mesh.position.y <= 0) {
+                    player.mesh.position.y = 0;
+                    isJumping = false;
+                    verticalVelocity = 0;
+                }
+            }
+
+            // Ducking
+            if (isDucking) {
+                duckTimer--;
+                if (duckTimer <= 0) {
+                    isDucking = false;
+                    player.mesh.scale.set(1, 1, 1);
+                    player.mesh.position.y = 0;
+                }
+            } else if (!isJumping) {
+                player.mesh.position.y = Math.max(0, player.mesh.position.y);
+            }
+
+            animateCharacter(player, 0, true);
+
+            // Dog Logic
+            const dogTargetX = player.mesh.position.x;
+            dog.mesh.position.x += (dogTargetX - dog.mesh.position.x) * 0.08;
+            animateCharacter(dog, 0, false);
+
+            // Obstacles
+            speed += 0.0001;
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                obs.mesh.position.z += speed;
+                
+                // Monster rotation
+                if (obs.type === 2) {
+                    obs.mesh.rotation.y += 0.05;
+                    obs.mesh.rotation.z += 0.02;
+                }
+
+                if (obs.mesh.position.z > 10) {
+                    scene.remove(obs.mesh);
+                    obstacles.splice(i, 1);
+                }
+            }
+            spawnObstacleLogic();
+
+            // Collision
+            const pBox = new THREE.Box3().setFromObject(player.mesh);
+            pBox.expandByScalar(-0.3); // Forgive small overlaps
+
+            for (let obs of obstacles) {
+                const oBox = new THREE.Box3().setFromObject(obs.mesh);
+                oBox.expandByScalar(-0.2);
+                
+                if (pBox.intersectsBox(oBox)) {
+                    // Collision Logic
+                    if (obs.type === 1 && isDucking) continue; // Safe under sign
+                    if (obs.type === 3 && isJumping && player.mesh.position.y > 0.5) continue; // Safe over canal
+                    
+                    gameOver();
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (gameActive) {
+                updateGame();
+                score += speed;
+                document.getElementById('score').innerText = Math.floor(score);
+                
+                // Camera Shake
+                if (shakeIntensity > 0) {
+                    camera.position.x += (Math.random() - 0.5) * 0.5;
+                    camera.position.y += (Math.random() - 0.5) * 0.5;
+                    shakeIntensity--;
+                    if(shakeIntensity <= 0) camera.position.set(0, 6, 9);
+                } else {
+                    camera.position.x += (player.mesh.position.x * 0.3 - camera.position.x) * 0.1;
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        init();
+    </script>
+</body>
+</html>
